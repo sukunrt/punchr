@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"math/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -133,26 +132,17 @@ func (s Server) GetAddrInfo(ctx context.Context, req *pb.GetAddrInfoRequest) (*p
 	for i, dbHost := range dbHosts {
 		dbHostIDs[i] = strconv.FormatInt(dbHost.ID, 10)
 	}
-
-	resp, err := s.queryMaddrs(ctx, dbHostIDs)
-	if err != nil {
-		return nil, err
+	for waitTime := 1 * time.Second; waitTime < 30*time.Second; waitTime *= 2 {
+		resp, err := s.queryMaddrs(ctx, dbHostIDs)
+		if err != nil {
+			return nil, err
+		}
+		if resp.RemoteId != nil {
+			return resp, nil
+		}
+		time.Sleep(waitTime)
 	}
-
-	r := rand.Float32()
-	if r < 0.15 {
-		resp.Protocols = []int32{multiaddr.P_IP4, multiaddr.P_TCP}
-	} else if r < 0.3 {
-		resp.Protocols = []int32{multiaddr.P_IP4, multiaddr.P_QUIC}
-	} else if r < 0.45 {
-		resp.Protocols = []int32{multiaddr.P_IP6, multiaddr.P_TCP}
-	} else if r < 0.6 {
-		resp.Protocols = []int32{multiaddr.P_IP6, multiaddr.P_QUIC}
-	} else {
-		resp.Protocols = []int32{}
-	}
-
-	return resp, nil
+	return nil, errors.New("timed out")
 }
 
 // queryMaddrs queries a single peer from the database and all its multi addresses to hole punch

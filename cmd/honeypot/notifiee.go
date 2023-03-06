@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"fmt"
 
-	"github.com/libp2p/go-libp2p/core/event"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
@@ -17,6 +15,7 @@ import (
 	"github.com/dennis-tra/punchr/pkg/db"
 	"github.com/dennis-tra/punchr/pkg/models"
 	"github.com/dennis-tra/punchr/pkg/util"
+	basic "github.com/libp2p/go-libp2p/p2p/host/basic"
 )
 
 func (h *Host) Listen(network.Network, ma.Multiaddr)       {}
@@ -29,10 +28,9 @@ func (h *Host) Connected(_ network.Network, conn network.Conn) {
 
 	remotePeer := conn.RemotePeer()
 	remoteMultiaddr := conn.RemoteMultiaddr()
-	stat := conn.Stat()
 
 	go func() {
-		if err := h.handleNewConnection(remotePeer, remoteMultiaddr, stat); err != nil {
+		if err := h.handleNewConnection(remotePeer, remoteMultiaddr, conn); err != nil {
 			log.WithError(err).Warnln("An error occurred while handling the new connection")
 			handledConns.With(prometheus.Labels{"status": "error"}).Inc()
 		}
@@ -41,12 +39,13 @@ func (h *Host) Connected(_ network.Network, conn network.Conn) {
 
 // handleNewConnection handles the new connection establishment.
 // We can do expensive things here as it's called within a go-routine by swarm.
-func (h *Host) handleNewConnection(remotePeer peer.ID, remoteMultiaddr ma.Multiaddr, stat network.ConnStats) error {
+func (h *Host) handleNewConnection(remotePeer peer.ID, remoteMultiaddr ma.Multiaddr, conn network.Conn) error {
 	defer log.WithFields(log.Fields{"remoteID": util.FmtPeerID(remotePeer)}).Infoln("Handled connection")
 
-	// Wait for the "identify" protocol to complete
-	if err := h.IdentifyWait(h.ctx, remotePeer); err != nil {
-		return errors.Wrap(err, "identify wait")
+	select {
+	case <-h.Host.(*basic.BasicHost).IDService().IdentifyWait(conn):
+	case <-h.ctx.Done():
+		return errors.New("Context cancelled")
 	}
 
 	// Grab all peer infos from the peer store
@@ -116,7 +115,7 @@ func (h *Host) handleNewConnection(remotePeer peer.ID, remoteMultiaddr ma.Multia
 		LocalID:            h.DBPeer.ID,
 		RemoteID:           dbPeer.ID,
 		ConnMultiAddressID: connMaddrID,
-		OpenedAt:           stat.Opened,
+		OpenedAt:           conn.Stat().Opened,
 	}
 	if err = dbConnEvt.Insert(h.ctx, txn, boil.Infer()); err != nil {
 		return errors.Wrap(err, "insert connection event")
@@ -134,46 +133,4 @@ func (h *Host) handleNewConnection(remotePeer peer.ID, remoteMultiaddr ma.Multia
 	handledConns.With(prometheus.Labels{"status": "ok"}).Inc()
 
 	return nil
-}
-
-// IdentifyWait waits for the "identify" protocol to complete.
-func (h *Host) IdentifyWait(ctx context.Context, pid peer.ID) error {
-	eventTypes := []interface{}{
-		new(event.EvtPeerIdentificationCompleted),
-		new(event.EvtPeerIdentificationFailed),
-	}
-
-	sub, err := h.EventBus().Subscribe(eventTypes)
-	if err != nil {
-		return errors.Wrap(err, "subscribing to event bus")
-	}
-	defer func() {
-		if err := sub.Close(); err != nil {
-			log.WithError(err).Warnln("Error closing event bus subscription")
-		}
-	}()
-
-	for {
-		var evtPeer peer.ID
-		var err error
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case e := <-sub.Out():
-			switch evt := e.(type) {
-			case event.EvtPeerIdentificationCompleted:
-				evtPeer = evt.Peer
-				err = nil
-			case event.EvtPeerIdentificationFailed:
-				evtPeer = evt.Peer
-				err = evt.Reason
-			default:
-				panic(fmt.Sprintf("unexpected event type %T", e))
-			}
-		}
-		if evtPeer != pid {
-			continue
-		}
-		return err
-	}
 }

@@ -283,9 +283,6 @@ func (h *Host) MeasurePing(ctx context.Context, pid peer.ID, mType pb.LatencyMea
 }
 
 func (h *Host) HolePunch(ctx context.Context, addrInfo peer.AddrInfo) (*HolePunchState, <-chan LatencyMeasurement) {
-	// we received a new peer to hole punch -> log its information
-	h.logAddrInfo(addrInfo)
-
 	// sanity operation -> clean up all resources before
 	h.prunePeer(addrInfo.ID)
 
@@ -322,12 +319,9 @@ func (h *Host) HolePunch(ctx context.Context, addrInfo peer.AddrInfo) (*HolePunc
 		return hpState, nil
 	}
 	hpState.ConnectEndedAt = time.Now()
-	h.logEntry(addrInfo.ID).Infoln("Connected!")
-
 	for _, conn := range h.Network().ConnsToPeer(addrInfo.ID) {
 		hpState.OpenMaddrsBefore = append(hpState.OpenMaddrsBefore, conn.RemoteMultiaddr())
 	}
-
 	relayedPingChan := h.MeasurePing(ctx, addrInfo.ID, pb.LatencyMeasurementType_TO_REMOTE_THROUGH_RELAY)
 
 	// we were able to connect to the remote peer.

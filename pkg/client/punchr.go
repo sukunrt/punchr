@@ -5,10 +5,8 @@ import (
 	"crypto/tls"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/adrg/xdg"
 	"github.com/google/uuid"
@@ -188,36 +186,11 @@ func (p Punchr) StartHolePunching(ctx context.Context) error {
 		h := p.hosts[i]
 
 		// Request peer to hole punch
-		addrInfo, protocols, err := p.RequestAddrInfo(ctx, h.ID())
+		addrInfo, _, err := p.RequestAddrInfo(ctx, h.ID())
 
-		h.protocolFiltersLk.Lock()
-		h.protocolFilters = protocols
-		h.protocolFiltersLk.Unlock()
-
-		if addrInfo == nil {
-			if err != nil && strings.Contains(err.Error(), "please restart the client") {
-				return errors.Wrap(err, "restart requested")
-			} else if err != nil {
-				log.WithError(err).Warnln("Error requesting addr info")
-			} else {
-				log.Infoln("No peer to hole punch received waiting 10s")
-			}
-
-			// Wait 30s until next request in either case
-			select {
-			case <-time.After(30 * time.Second):
-				continue
-			case <-ctx.Done():
-				return ctx.Err()
-			}
+		if addrInfo == nil || err != nil {
+			continue
 		}
-
-		// Log request
-		protocolNames := make([]string, len(protocols))
-		for j, protocol := range protocols {
-			protocolNames[j] = multiaddr.ProtocolWithCode(int(protocol)).Name
-		}
-		log.WithField("remoteID", addrInfo.ID).WithField("filter", protocolNames).Infoln("Received peer to hole punch from server!")
 
 		// Instruct the i-th host to hole punch
 		hpState, relayedPingChan := h.HolePunch(ctx, *addrInfo)
